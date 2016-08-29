@@ -8,6 +8,8 @@ local icosphere = require("geometry/icosphere.t")
 local pbr = require("shaders/pbr.t")
 local gfx = require("gfx")
 local openvr = require("vr/openvr.t")
+local orbitline = require("orbitline.t")
+local grid = require("radialgrid.t")
 
 SatelliteApp = VRApp:extend("SatelliteApp")
 
@@ -51,9 +53,18 @@ function SatelliteApp:initPipeline()
     })
     self.forwardpass = forwardpass
 
+    local transparentpass = gfx.MultiShaderStage({
+        renderTarget = nil,
+        clear = {depth = false, color = false, stencil = false},
+        shaders = {orbitline = orbitline.OrbitLineShader()}
+    })
+    self.transparentpass = transparentpass
+
     for i = 1,2 do
-        local eyePass = forwardpass:duplicate(self.targets[i])
-        self.pipeline:add("forward_" .. i, eyePass, self.eyeContexts[i])
+        local eyePassSolid = forwardpass:duplicate(self.targets[i])
+        self.pipeline:add("forward_" .. i, eyePassSolid, self.eyeContexts[i])
+        local eyePassTransparent = transparentpass:duplicate(self.targets[i])
+        self.pipeline:add("transparent_" .. i, eyePassTransparent, self.eyeContexts[i])
     end
 
     -- finalize pipeline
@@ -73,14 +84,14 @@ function createGeometry()
     local geo = uvsphere.uvSphereGeo({latDivs = 60, lonDivs = 60}, "uvsphere")
     local mat = pbr.PBRMaterial("solid"):roughness(0.8):tint(0.1,0.1,0.1)
 
-    skytex = require("utils/textureutils.t").loadTexture("textures/starmap.ktx")
+    skytex = require("utils/textureutils.t").loadTexture("textures/starmap_8k.ktx")
     local skymat = require("shaders/flat.t").FlatMaterial({diffuseMap = skytex, skybox=true})
     local skybox = gfx.Object3D(geo, skymat)
     skybox.scale:set(-60, -60, -60)
     skybox:updateMatrix()
     app.scene:add(skybox)
 
-    local earthtex = require("utils/textureutils.t").loadTexture("textures/earth.ktx")
+    local earthtex = require("utils/textureutils.t").loadTexture("textures/earth_lights.ktx")
     local earthmat = require("shaders/flat.t").FlatMaterial({diffuseMap = earthtex})
     local theearth = gfx.Object3D(geo, earthmat)
     theearth.scale:set(0.5,0.5,0.5)
@@ -88,13 +99,20 @@ function createGeometry()
     theearth:updateMatrix()
     app.scene:add(theearth)
 
-    local nspheres = 20
-    for i = 1,nspheres do
-        local sphere = gfx.Object3D(geo, mat)
-        sphere.position:set(randu(5), randu(5), i*3)
-        sphere:updateMatrix()
-        app.scene:add(sphere)
-    end
+    -- local nspheres = 20
+    -- for i = 1,nspheres do
+    --     local sphere = gfx.Object3D(geo, mat)
+    --     sphere.position:set(randu(5), randu(5), i*3)
+    --     sphere:updateMatrix()
+    --     app.scene:add(sphere)
+    -- end
+    testorbits = orbitline.createTestOrbits(10, 50)
+    app.scene:add(testorbits)
+
+    log.info("Creating grid")
+    thegrid = grid.createGrid({})
+    log.info(thegrid)
+    app.scene:add(thegrid)
 
     log.info("Created axis stuff")
     axisGeo = require("geometry/widgets.t").axisWidgetGeo("axis_widget_geo", 0.1)
