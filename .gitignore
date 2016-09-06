@@ -1,6 +1,15 @@
 truss.zip
 *.exe
 *.bin
+*.ktx
+*.png
+*.jpg
+*.ttf
+*.obj
+*.binpts
+OFL.txt
 trusslog.txt
 pointcloud/include
 pointcloud/lib
+caves/include
+caves/lib
