@@ -1,0 +1,6 @@
+truss.zip
+*.exe
+*.bin
+trusslog.txt
+pointcloud/include
+pointcloud/lib
