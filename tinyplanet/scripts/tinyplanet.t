@@ -13,6 +13,9 @@ local objloader = require("loaders/objloader.t")
 local gfx = require("gfx")
 local ecs = require("ecs")
 local math = require("math")
+local openvr = require("vr/openvr.t")
+local VRApp = require("vr/vrapp.t").VRApp
+local flat = require("shaders/flat.t")
 
 local models = {}
 local function load_base_models()
@@ -110,7 +113,7 @@ local function rand_point_in_sphere(target)
   end
 end
 
-function merge_trees(n_trees, world_radius)
+local function merge_trees(n_trees, world_radius)
   local builder = geometry.util.Builder()
   for _ = 1, n_trees do
     local treeroot = builder.root:create_child(ecs.Entity3d, "tree")
@@ -124,7 +127,63 @@ function merge_trees(n_trees, world_radius)
   return ret
 end
 
+local SphereWalkComponent = ecs.Component:extend("SphereWalkComponent")
+function SphereWalkComponent:init(options)
+  self.mount_name = "spherewalk"
+  options = options or {}
+  self.tx = math.Vector()
+  self.ty = math.Vector()
+  self.tz = math.Vector()
+  self.player_height = options.player_height or 1.6
+  self.world_radius = options.world_radius
+  self.old_hmd_pos = math.Vector()
+  self.new_hmd_pos = math.Vector()
+  self.tp = math.Vector(0.0, self.player_height, 0.0, 1.0)
+  self.player_tf = math.Matrix4():identity()
+  self.player_tf:set_column(4, self.tp)
+  self.rel_player_tf = math.Matrix4():identity()
+end
+
+function SphereWalkComponent:mount()
+  self:add_to_systems({"preupdate"})
+  self:wake()
+end
+
+function SphereWalkComponent:preupdate()
+  if not openvr.hmd then return end
+  openvr.hmd.pose:get_column(4, self.new_hmd_pos)
+
+  -- first, update the player tf
+  self.player_tf:get_column(1, self.tx)
+  self.player_tf:get_column(3, self.tz)
+  self.player_tf:get_column(4, self.tp)
+
+  local dx = self.new_hmd_pos.elem.x - self.old_hmd_pos.elem.x
+  local dz = self.new_hmd_pos.elem.z - self.old_hmd_pos.elem.z
+
+  self.tp:lincomb(self.tp, self.tz, 1.0, dz)
+  self.tp:lincomb(self.tp, self.tx, 1.0, dx)
+  self.tp:normalize3():multiply(self.world_radius + self.player_height)
+  self.tp.elem.w = 1.0
+
+  self.player_tf:set_column(4, self.tp)
+  update_frame_up_vector(self.player_tf, self.tp:normalize3())
+
+  -- now we want a room tf such that 
+  -- player_tf = room_tf * rel_player_tf
+  -- room_tf = player_tf * inv(rel_player_tf)
+  self.tp:copy(self.new_hmd_pos)
+  self.tp.elem.y = self.player_height
+  self.tp.elem.w = 1.0
+  self.rel_player_tf:identity():set_column(4, self.tp)
+  self.rel_player_tf:invert()
+  self.ent.matrix:multiply_matrix(self.player_tf, self.rel_player_tf)
+
+  self.old_hmd_pos, self.new_hmd_pos = self.new_hmd_pos, self.old_hmd_pos
+end
+
 function init()
+  math.randomseed(os.time())
   local cfg = config.Config{
       orgname = "truss_experiments", 
       appname = "tiny_planet", 
@@ -137,10 +196,19 @@ function init()
   cfg.clear_color = 0x000000ff 
   cfg:save()
 
-  myapp = app.App(cfg)
-  myapp.camera:add_component(orbitcam.OrbitControl{min_rad = 1, max_rad = 4})
+  local world_radius = 10.5
 
-  local world_radius = 5.0
+  myapp = VRApp(cfg)
+  --myapp.camera:add_component(orbitcam.OrbitControl{min_rad = 1, max_rad = 4})
+
+  local roomroot = myapp.scene:create_child(ecs.Entity3d, "roomroot")
+  roomroot:add_component(SphereWalkComponent{world_radius = world_radius / 2,
+                                             player_height = 1.6})
+
+  --roomroot.position:set(0.0, 2.5, 0.0)
+  --roomroot:update_matrix()
+  myapp.hmd_cam:set_parent(roomroot)
+
   local planetgeo = geometry.icosphere_geo{radius = world_radius, detail = 4}
   local mat = pbr.FacetedPBRMaterial{diffuse = {0.5, 0.5, 0.5, 1.0}, 
                                      tint = {0.001, 0.001, 0.001}, 
@@ -158,19 +226,17 @@ function init()
   planet:update_matrix()
 
   load_base_models()
-  local trees = merge_trees(5, world_radius)
+  local trees = merge_trees(50, world_radius)
   treemesh = myapp.scene:create_child(graphics.Mesh, "treemesh", trees, mat)
   treemesh.scale:set(0.5, 0.5, 0.5)
   treemesh:update_matrix()
 
-  --create_leaf_section(myapp.scene, 4, 1.0, mat)
-  mygrid = myapp.scene:create_child(grid.Grid, {thickness = 0.03,
-                                                numlines = 0, numcircles = 30,
-                                                spacing = 2.0,
-                                                color = {0.9, 0.1, 0.1, 1.0}})
-  mygrid.position:set(0.0, -0.5, 0.0)
-  mygrid.quaternion:euler({x = math.pi / 2.0, y = 0.0, z = 0.0})
-  mygrid:update_matrix()
+  local sky_sphere = geometry.uvsphere_geo{lat_divs = 30, lon_divs = 30}
+  local skymat = flat.FlatMaterial{skybox = true, 
+                      texture = gfx.Texture("textures/starmap.ktx")}
+  skybox = myapp.scene:create_child(graphics.Mesh, "skybox", sky_sphere, skymat)
+  skybox.scale:set(-30, -30, -30)
+  skybox:update_matrix()
 end
 
 function update()
